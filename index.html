@@ -524,7 +524,7 @@ function switchTab(t) {
 // ── Wage type config ───────────────────────────────
 var TC = {
   fd1on1: {label:'FD 1對1',   fields:[{id:'dives', label:'下水支數', ph:'支數'}], calc:function(v){ return (v.dives||0)*700; }},
-  fd1on2: {label:'FD 1對2',   fields:[{id:'persons',label:'人數',ph:'人'},{id:'dives',label:'下水支數',ph:'支數'}], calc:function(v){ return (v.persons||0)*350; }},
+  fd1on2: {label:'FD 1對2',   fields:[{id:'persons',label:'人數',ph:'人'},{id:'dives',label:'下水支數',ph:'支數'}], calc:function(v){ return (v.persons||0)*(v.dives||0)*350; }},
   exp:    {label:'體驗潛水',   fields:[{id:'persons',label:'人數',ph:'人'}], calc:function(v){ return (v.persons||0)*1000; }},
   calm:   {label:'平靜水域',   fields:[{id:'persons',label:'人數',ph:'人'}], calc:function(v){ return (v.persons||0)*600; }},
   sea:    {label:'海習上課',   fields:[{id:'dives', label:'下水支數',ph:'支數'}], calc:function(v){ return (v.dives||0)*500; }},
@@ -1003,7 +1003,11 @@ function ccRemoveTankDay(i,j) { ccTanks[i].days.splice(j,1); ccRenderTanks(); }
 function ccRenderTanks() {
   var c = document.getElementById('cc-tanks'); c.innerHTML = '';
   ccTanks.forEach(function(tp,i) {
-    var opts = people.map(function(p){ return '<option value="'+p+'" '+(tp.name===p?'selected':'')+'>'+p+'</option>'; }).join('');
+    var tankPeople = people.concat(['學生','__other__']);
+    var opts = tankPeople.map(function(p){
+      var label = p === '__other__' ? '其他…' : p;
+      return '<option value="'+p+'" '+(tp.name===p?'selected':'')+'>'+label+'</option>';
+    }).join('');
     var dhtml = (tp.days||[]).map(function(day,j) {
       return '<div class="day-row">'
         + '<input type="date" class="cc-fi" value="'+day.date+'" onchange="ccTanks['+i+'].days['+j+'].date=this.value" style="width:130px;">'
@@ -1015,7 +1019,8 @@ function ccRenderTanks() {
     }).join('');
     var d = document.createElement('div'); d.className = 'sub-block';
     d.innerHTML = '<div class="sub-head"><span style="font-size:13px;color:var(--muted);font-weight:600;">使用人</span>'
-      + '<select class="cc-fi" onchange="ccTanks['+i+'].name=this.value" style="width:100px;">'+opts+'</select>'
+      + '<select class="cc-fi" onchange="ccTanks['+i+'].name=this.value;ccRenderTanks()" style="width:100px;">'+opts+'</select>'
+      + (tp.name==='__other__' ? '<input type="text" class="cc-fi" placeholder="請輸入姓名" value="'+(tp.customName||'')+'" onchange="ccTanks['+i+'].customName=this.value" style="width:110px;">' : '')
       + '<button class="btn-rm" onclick="ccRemoveTank('+i+')">移除</button></div>'
       + dhtml
       + '<button class="btn-add" onclick="ccAddTankDay('+i+')">＋ 新增日期</button>';
@@ -1065,7 +1070,7 @@ function ccCalculate() {
   var insurance = insS * insD * INS;
   var tankCost = 0, tankLines = [];
   ccTanks.forEach(function(tp) {
-    var tname = tp.name;
+    var tname = tp.name === '__other__' ? (tp.customName || '其他') : tp.name;
     (tp.days||[]).forEach(function(day) {
       var price = (day.nitrox || ccSt.course==='NITROX') ? TANK_NX : TANK_N;
       tankCost += day.count * price;
