@@ -3,7 +3,7 @@ var editBtns = '';
     var rtype = isExp ? 'e' : 'w';
     var rid = String(r.id);
     editBtns = '<div style="display:flex;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">'
-      + '<button data-type="' + rtype + '" data-id="' + rid + '" onclick="openEditModal(this.dataset.type,this.dataset.id)" style="flex:1;padding:9px;border:1px solid var(--border2);border-radius:var(--r);background:#fff;font-size:14px;cursor:pointer;font-family:inherit;color:var(--text);">✏️ 編輯</button>'
-      + '<button data-type="' + rtype + '" data-id="' + rid + '" onclick="deleteRecord(this.dataset.type,this.dataset.id)" style="flex:1;padding:9px;border:1px solid var(--danger);border-radius:var(--r);background:#fff;font-size:14px;cursor:pointer;font-family:inherit;color:var(--danger);">🗑 刪除</button>'
+      + '<button data-type="' + rtype + '" data-id="' + rid + '" onclick="openEditModal(this.dataset.type,this.dataset.id)" style="flex:1;padding:9px;border:1px solid var(--border2);border-radius:var(--r);background:#fff;font-size:14px;cursor:pointer;font-family:inherit;color:var(--text);">編輯</button>'
+      + '<button data-type="' + rtype + '" data-id="' + rid + '" onclick="deleteRecord(this.dataset.type,this.dataset.id)" style="flex:1;padding:9px;border:1px solid var(--danger);border-radius:var(--r);background:#fff;font-size:14px;cursor:pointer;font-family:inherit;color:var(--danger);">刪除</button>'
       + '</div>';
   }
