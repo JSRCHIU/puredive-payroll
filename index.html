@@ -493,6 +493,7 @@ function tryRemovePerson(name) {
   renderPersonRows();
   renderWage(); renderExp(); renderFinance();
   showToast('已移除 ' + name);
+  gasCall({action:'removePerson', name:name}, function(){});
 }
 
 function showAddPerson() {
@@ -508,6 +509,7 @@ function confirmAddPerson() {
   closeModal('modal-add');
   renderPersonRows();
   showToast('已新增 ' + name);
+  gasCall({action:'addPerson', name:name}, function(){});
 }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
@@ -581,6 +583,14 @@ function addWage() {
     fromTeach: S.type==='teach' ? S.wp : null
   };
   S.wr.push(rec);
+  // sync to Sheets
+  gasCall({
+    action:'addWage', person:rec.person, type:rec.type,
+    detail:rec.detail, amount:rec.amount, date:rec.date, note:rec.note||'',
+    fromTeach:rec.fromTeach||'', td:rec.td?JSON.stringify(rec.td):''
+  }, function(res){
+    if (res && res.id) { var r=S.wr.find(function(x){return x.id===rec.id;}); if(r) r.id=res.id; }
+  });
   if (S.type === 'teach' && TD.assistData && TD.assistData.length) {
     importAssistWages(TD.assistData, S.wp, rec.date);
   }
@@ -639,11 +649,19 @@ function addAssistRecord(a, teacherName, date) {
   var detail = '';
   if (a.calm > 0) detail += '平靜 ' + a.calm + ' 人 ';
   if (a.open > 0) detail += '開放 ' + a.open + ' 支';
-  S.wr.push({
+  var arec = {
     id: Date.now() + '_' + Math.random(), person: a.name, type: '跟課',
     detail: detail.trim(), amount: a.fee, date: date,
     note: '來自 ' + teacherName + ' 的教學',
     paid: false, batchId: null, td: null, fromTeach: teacherName
+  };
+  S.wr.push(arec);
+  gasCall({
+    action:'addWage', person:a.name, type:'跟課',
+    detail:detail.trim(), amount:a.fee, date:date,
+    note:'來自 '+teacherName+' 的教學', fromTeach:teacherName, td:''
+  }, function(res){
+    if (res && res.id) { var r=S.wr.find(function(x){return x.id===arec.id;}); if(r) r.id=res.id; }
   });
 }
 
@@ -758,11 +776,18 @@ function addExp() {
   var desc = document.getElementById('edesc').value.trim();
   if (!amt || amt <= 0) { showToast('請填入金額'); return; }
   if (!desc) { showToast('請填入項目說明'); return; }
-  S.er.push({
+  var erec = {
     id: Date.now(), person: S.ep, desc: desc, amount: amt,
     date: document.getElementById('ed').value || today,
     note: document.getElementById('en').value,
     file: S.file, paid: false, batchId: null
+  };
+  S.er.push(erec);
+  gasCall({
+    action:'addExpense', person:erec.person, desc:erec.desc,
+    amount:erec.amount, date:erec.date, note:erec.note||'', file:erec.file||''
+  }, function(res){
+    if (res && res.id) { var r=S.er.find(function(x){return x.id===erec.id;}); if(r) r.id=res.id; }
   });
   showToast('已新增代墊記錄');
   document.getElementById('ea').value = ''; document.getElementById('edesc').value = ''; document.getElementById('en').value = '';
@@ -822,6 +847,14 @@ function markPaid() {
     var arr = item.type === 'w' ? S.wr : S.er;
     var r = arr.find(function(x){ return String(x.id) === String(item.id); });
     if (r) { r.paid = true; r.batchId = batchId; r.paidDate = paidDate; if (item.type === 'e') r.file = null; }
+  });
+  gasCall({
+    action:'markPaid',
+    ids: JSON.stringify(toMark),
+    batchId: batchId,
+    paidDate: paidDate
+  }, function(res){
+    if (!res || !res.success) showToast('同步失敗，請重試');
   });
   showToast('已標記為已付款');
   renderWage(); renderExp(); renderFinance();
@@ -1169,150 +1202,6 @@ function loadData() {
     renderWage(); renderExp(); renderFinance();
     hideSyncBar();
   });
-}
-
-// Override addWage to also sync
-var _origAddWage = addWage;
-function addWage() {
-  if (!S.type) { showToast('請先選擇類型'); return; }
-  var amt, detail = '', typeLabel = TC[S.type] ? TC[S.type].label : '';
-  if (S.type === 'teach') {
-    amt = TD.amount;
-    if (!amt) { showToast('請先完成教學試算'); return; }
-    detail = '教學試算';
-  } else {
-    var cfg = TC[S.type]; var v = {};
-    cfg.fields.forEach(function(f){ var el=document.getElementById('tf-'+f.id); v[f.id]=el?parseFloat(el.value)||0:0; });
-    amt = cfg.calc(v);
-    if (amt <= 0) { showToast('請填入數量'); return; }
-    cfg.fields.forEach(function(f){ if(v[f.id]) detail += f.label+' '+v[f.id]+' '; });
-  }
-  var date = document.getElementById('wd').value || today;
-  var note = document.getElementById('wn').value;
-  var fromTeach = S.type==='teach' ? S.wp : null;
-  var td = S.type==='teach' ? TD.detail : null;
-
-  var rec = {
-    id: Date.now(), person: S.wp, type: typeLabel,
-    detail: detail.trim(), amount: amt, date: date, note: note,
-    paid: false, batchId: null, paidDate: null, fromTeach: fromTeach, td: td
-  };
-  S.wr.push(rec);
-
-  // Sync to GAS
-  var gasParams = {
-    action:'addWage', person:S.wp, type:typeLabel,
-    detail:detail.trim(), amount:amt, date:date, note:note||'',
-    fromTeach:fromTeach||'', td:td?JSON.stringify(td):''
-  };
-  gasCall(gasParams, function(res){
-    if (res && res.id) {
-      // Update local id to match sheet id
-      var r = S.wr.find(function(x){ return x.id === rec.id; });
-      if (r) r.id = res.id;
-    }
-  });
-
-  if (S.type === 'teach' && TD.assistData && TD.assistData.length) {
-    importAssistWages(TD.assistData, S.wp, date);
-  }
-  showToast('已新增工資記錄');
-  resetWageForm();
-  renderWage();
-}
-
-// Override addExp to also sync
-var _origAddExp = addExp;
-function addExp() {
-  var amt = parseFloat(document.getElementById('ea').value);
-  var desc = document.getElementById('edesc').value.trim();
-  if (!amt || amt <= 0) { showToast('請填入金額'); return; }
-  if (!desc) { showToast('請填入項目說明'); return; }
-  var date = document.getElementById('ed').value || today;
-  var note = document.getElementById('en').value;
-  var rec = {
-    id: Date.now(), person: S.ep, desc: desc, amount: amt,
-    date: date, note: note, file: S.file, paid: false, batchId: null
-  };
-  S.er.push(rec);
-
-  gasCall({action:'addExpense', person:S.ep, desc:desc, amount:amt, date:date, note:note||'', file:S.file||''}, function(res){
-    if (res && res.id) {
-      var r = S.er.find(function(x){ return x.id === rec.id; });
-      if (r) r.id = res.id;
-    }
-  });
-
-  showToast('已新增代墊記錄');
-  document.getElementById('ea').value=''; document.getElementById('edesc').value=''; document.getElementById('en').value='';
-  document.getElementById('ub').innerHTML='📎 上傳收據（選填）<br><small style="font-size:11px;">付款後自動刪除</small>';
-  S.file=null; renderExp();
-}
-
-// Override markPaid to also sync
-var _origMarkPaid = markPaid;
-function markPaid() {
-  var toMark = [];
-  document.querySelectorAll('.pay-item').forEach(function(r){ if(r.querySelector('.chk.on')) toMark.push({id:r.dataset.id, type:r.dataset.type}); });
-  if (!toMark.length) { showToast('請先勾選結算項目'); return; }
-  batchCounter++;
-  var batchId = 'b' + batchCounter;
-  var paidDate = today;
-  toMark.forEach(function(item) {
-    var arr = item.type==='w' ? S.wr : S.er;
-    var r = arr.find(function(x){ return String(x.id) === String(item.id); });
-    if (r) { r.paid=true; r.batchId=batchId; r.paidDate=paidDate; if(item.type==='e') r.file=null; }
-  });
-
-  gasCall({
-    action:'markPaid',
-    ids: JSON.stringify(toMark),
-    batchId: batchId,
-    paidDate: paidDate
-  }, function(res){
-    if (!res || !res.success) showToast('同步失敗，請重試');
-  });
-
-  showToast('已標記為已付款');
-  renderWage(); renderExp(); renderFinance();
-}
-
-// Override confirmAddPerson to also sync
-var _origConfirmAddPerson = confirmAddPerson;
-function confirmAddPerson() {
-  var name = document.getElementById('inp-new-person').value.trim();
-  if (!name) { showToast('請輸入姓名'); return; }
-  if (people.includes(name)) { showToast(name + ' 已存在'); return; }
-  people.push(name);
-  closeModal('modal-add');
-  renderPersonRows();
-  showToast('已新增 ' + name);
-  gasCall({action:'addPerson', name:name}, function(){});
-}
-
-// Override tryRemovePerson to also sync
-var _origTryRemove = tryRemovePerson;
-function tryRemovePerson(name) {
-  if (people.length <= 1) { showToast('至少保留一位人員'); return; }
-  var unpaidWage = S.wr.filter(function(r){ return r.person===name && !r.paid; }).length;
-  var unpaidExp  = S.er.filter(function(r){ return r.person===name && !r.paid; }).length;
-  if (unpaidWage > 0 || unpaidExp > 0) {
-    var msg = '「'+name+'」還有未結清記錄（';
-    var parts = [];
-    if (unpaidWage > 0) parts.push('工資 '+unpaidWage+' 筆');
-    if (unpaidExp  > 0) parts.push('代墊 '+unpaidExp+' 筆');
-    msg += parts.join('、') + '），請先結算後再移除。';
-    alert(msg); return;
-  }
-  if (!confirm('確定移除「'+name+'」？此人已付款的歷史記錄會保留，但從人員列表中移除。')) return;
-  people = people.filter(function(p){ return p !== name; });
-  if (S.wp===name) S.wp=people[0];
-  if (S.ep===name) S.ep=people[0];
-  if (S.fp===name) S.fp=people[0];
-  editMode = false;
-  renderPersonRows(); renderWage(); renderExp(); renderFinance();
-  showToast('已移除 ' + name);
-  gasCall({action:'removePerson', name:name}, function(){});
 }
 
 // Sync bar UI
