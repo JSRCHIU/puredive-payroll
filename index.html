@@ -493,7 +493,7 @@ function tryRemovePerson(name) {
   renderPersonRows();
   renderWage(); renderExp(); renderFinance();
   showToast('已移除 ' + name);
-  gasCall({action:'removePerson', name:name}, function(){});
+  sbFetch('people?name=eq.'+encodeURIComponent(name), 'DELETE').catch(function(e){ console.error('removePerson sync', e); });
 }
 
 function showAddPerson() {
@@ -509,7 +509,7 @@ function confirmAddPerson() {
   closeModal('modal-add');
   renderPersonRows();
   showToast('已新增 ' + name);
-  gasCall({action:'addPerson', name:name}, function(){});
+  sbFetch('people', 'POST', {name:name}).catch(function(e){ console.error('addPerson sync', e); });
 }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
@@ -583,14 +583,14 @@ function addWage() {
     fromTeach: S.type==='teach' ? S.wp : null
   };
   S.wr.push(rec);
-  // sync to Sheets
-  gasCall({
-    action:'addWage', person:rec.person, type:rec.type,
-    detail:rec.detail, amount:rec.amount, date:rec.date, note:rec.note||'',
-    fromTeach:rec.fromTeach||'', td:rec.td?JSON.stringify(rec.td):''
-  }, function(res){
-    if (res && res.id) { var r=S.wr.find(function(x){return x.id===rec.id;}); if(r) r.id=res.id; }
-  });
+  // sync to Supabase
+  var wageRow = {
+    id: String(rec.id), person: rec.person, type: rec.type,
+    detail: rec.detail, amount: rec.amount, date: rec.date, note: rec.note||'',
+    paid: false, from_teach: rec.fromTeach||null,
+    td_income: rec.td?rec.td.income:null, td_cost: rec.td?rec.td.cost:null, td_net: rec.td?rec.td.net:null
+  };
+  sbFetch('wages', 'POST', wageRow).catch(function(e){ console.error('addWage sync', e); });
   if (S.type === 'teach' && TD.assistData && TD.assistData.length) {
     importAssistWages(TD.assistData, S.wp, rec.date);
   }
@@ -656,13 +656,11 @@ function addAssistRecord(a, teacherName, date) {
     paid: false, batchId: null, td: null, fromTeach: teacherName
   };
   S.wr.push(arec);
-  gasCall({
-    action:'addWage', person:a.name, type:'跟課',
-    detail:detail.trim(), amount:a.fee, date:date,
-    note:'來自 '+teacherName+' 的教學', fromTeach:teacherName, td:''
-  }, function(res){
-    if (res && res.id) { var r=S.wr.find(function(x){return x.id===arec.id;}); if(r) r.id=res.id; }
-  });
+  sbFetch('wages', 'POST', {
+    id: String(arec.id), person: a.name, type: '跟課',
+    detail: detail.trim(), amount: a.fee, date: date,
+    note: '來自 '+teacherName+' 的教學', paid: false, from_teach: teacherName
+  }).catch(function(e){ console.error('addAssist sync', e); });
 }
 
 function resetWageForm() {
@@ -783,12 +781,11 @@ function addExp() {
     file: S.file, paid: false, batchId: null
   };
   S.er.push(erec);
-  gasCall({
-    action:'addExpense', person:erec.person, desc:erec.desc,
-    amount:erec.amount, date:erec.date, note:erec.note||'', file:erec.file||''
-  }, function(res){
-    if (res && res.id) { var r=S.er.find(function(x){return x.id===erec.id;}); if(r) r.id=res.id; }
-  });
+  sbFetch('expenses', 'POST', {
+    id: String(erec.id), person: erec.person, desc: erec.desc,
+    amount: erec.amount, date: erec.date, note: erec.note||'',
+    paid: false, file_name: erec.file||null
+  }).catch(function(e){ console.error('addExp sync', e); });
   showToast('已新增代墊記錄');
   document.getElementById('ea').value = ''; document.getElementById('edesc').value = ''; document.getElementById('en').value = '';
   document.getElementById('ub').innerHTML = '📎 上傳收據（選填）<br><small style="font-size:11px;">付款後自動刪除</small>';
@@ -848,14 +845,17 @@ function markPaid() {
     var r = arr.find(function(x){ return String(x.id) === String(item.id); });
     if (r) { r.paid = true; r.batchId = batchId; r.paidDate = paidDate; if (item.type === 'e') r.file = null; }
   });
-  gasCall({
-    action:'markPaid',
-    ids: JSON.stringify(toMark),
-    batchId: batchId,
-    paidDate: paidDate
-  }, function(res){
-    if (!res || !res.success) showToast('同步失敗，請重試');
-  });
+  // sync paid status to Supabase
+  var wageIds = toMark.filter(function(x){return x.type==='w';}).map(function(x){return String(x.id);});
+  var expIds  = toMark.filter(function(x){return x.type==='e';}).map(function(x){return String(x.id);});
+  if (wageIds.length) {
+    sbFetch('wages?id=in.('+wageIds.join(',')+')', 'PATCH', {paid:true, batch_id:batchId, paid_date:paidDate})
+      .catch(function(e){ console.error('markPaid wages', e); });
+  }
+  if (expIds.length) {
+    sbFetch('expenses?id=in.('+expIds.join(',')+')', 'PATCH', {paid:true, batch_id:batchId, paid_date:paidDate, file_name:null})
+      .catch(function(e){ console.error('markPaid exps', e); });
+  }
   showToast('已標記為已付款');
   renderWage(); renderExp(); renderFinance();
 }
@@ -1153,53 +1153,62 @@ function showToast(msg) {
   clearTimeout(tTimer); tTimer = setTimeout(function(){ t.style.display='none'; }, 2200);
 }
 
-// ── Google Sheets API ─────────────────────────────
-var GAS_URL = 'https://script.google.com/macros/s/AKfycbyNcgdIeeG6mWLONCFtgufApw-DJhlHMgMkmmrhE6XThYEsrC2LOO73koHiLFIyF1wU/exec';
-var syncing = false;
+// ── Supabase API ──────────────────────────────────
+var SB_URL = 'https://yuznxwbenfkeejomqybv.supabase.co';
+var SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl1em54d2JlbmZrZWVqb21xeWJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5NTcyNTcsImV4cCI6MjA5MzUzMzI1N30.J0GzrW0rhh-Sdn4eTNBGbmn1Ik5z_udmeNFJK7FlgnY';
 
-function gasCall(params, callback) {
-  var url = GAS_URL + '?' + Object.keys(params).map(function(k){
-    return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
-  }).join('&');
-  fetch(url)
-    .then(function(r){ return r.json(); })
-    .then(function(data){ if(callback) callback(data); })
-    .catch(function(err){ console.error('GAS error', err); showToast('網路錯誤，請重試'); });
+function sbFetch(path, method, body) {
+  var opts = {
+    method: method || 'GET',
+    headers: {
+      'apikey': SB_KEY,
+      'Authorization': 'Bearer ' + SB_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': method === 'POST' ? 'return=representation' : ''
+    }
+  };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(SB_URL + '/rest/v1/' + path, opts).then(function(r) {
+    if (!r.ok) return r.text().then(function(t){ throw new Error(t); });
+    return r.json().catch(function(){ return {}; });
+  });
 }
 
 function loadData() {
   showSyncBar('載入中…');
-  gasCall({action:'getData'}, function(data) {
-    if (data.error) { showToast('載入失敗：' + data.error); hideSyncBar(); return; }
-    // Restore people
-    if (data.people && data.people.length) people = data.people;
-    // Restore wage records
-    if (data.wages) {
-      S.wr = data.wages.map(function(r) {
+  Promise.all([
+    sbFetch('people?select=name&order=id'),
+    sbFetch('wages?select=*&order=created_at'),
+    sbFetch('expenses?select=*&order=created_at')
+  ]).then(function(results) {
+    var pData = results[0], wData = results[1], eData = results[2];
+    if (pData && pData.length) people = pData.map(function(r){ return r.name; });
+    if (wData) {
+      S.wr = wData.map(function(r) {
         return {
           id: r.id, person: r.person, type: r.type, detail: r.detail||'',
-          amount: r.amount, date: r.date, note: r.note||'',
-          paid: r.paid, batchId: r.batchId||null, paidDate: r.paidDate||null,
-          fromTeach: r.fromTeach||null, td: r.td||null
+          amount: Number(r.amount), date: r.date, note: r.note||'',
+          paid: r.paid, batchId: r.batch_id||null, paidDate: r.paid_date||null,
+          fromTeach: r.from_teach||null,
+          td: (r.td_income!=null) ? {income:r.td_income, cost:r.td_cost, net:r.td_net} : null
         };
       });
     }
-    // Restore expense records
-    if (data.expenses) {
-      S.er = data.expenses.map(function(r) {
+    if (eData) {
+      S.er = eData.map(function(r) {
         return {
-          id: r.id, person: r.person, desc: r.desc, amount: r.amount,
+          id: r.id, person: r.person, desc: r["desc"], amount: Number(r.amount),
           date: r.date, note: r.note||'', paid: r.paid,
-          batchId: r.batchId||null, paidDate: r.paidDate||null, file: r.file||null
+          batchId: r.batch_id||null, paidDate: r.paid_date||null, file: r.file_name||null
         };
       });
     }
-    // Set default selected person
-    if (people.length) {
-      S.wp = people[0]; S.ep = people[0]; S.fp = people[0];
-    }
-    renderPersonRows();
-    renderWage(); renderExp(); renderFinance();
+    if (people.length) { S.wp=people[0]; S.ep=people[0]; S.fp=people[0]; }
+    renderPersonRows(); renderWage(); renderExp(); renderFinance();
+    hideSyncBar();
+  }).catch(function(err) {
+    console.error('loadData error', err);
+    showToast('載入失敗，請重新整理');
     hideSyncBar();
   });
 }
